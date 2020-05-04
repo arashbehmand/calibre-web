@@ -94,6 +94,14 @@ class Identifiers(Base):
             return u"Google Books"
         elif self.type == "kobo":
             return u"Kobo"
+        elif self.type == "fidibo":
+            return u"فیدیبو"
+        elif self.type == "taaghche":
+            return u"طاقچه"
+        elif self.type == "ketabrah":
+            return u"کتابراه"
+        elif self.type == "nlai":
+            return u"کتابخانه ملی"
         if self.type == "lubimyczytac":
             return u"Lubimyczytac"
         else:
@@ -115,7 +123,15 @@ class Identifiers(Base):
         elif self.type == "kobo":
             return u"https://www.kobo.com/ebook/{0}".format(self.val)
         elif self.type == "lubimyczytac":
-            return u" http://lubimyczytac.pl/ksiazka/{0}".format(self.val)
+            return u"http://lubimyczytac.pl/ksiazka/{0}".format(self.val)
+        elif self.type == "fidibo":
+            return u"https://fidibo.com/book/{0}".format(self.val)
+        elif self.type == "taaghche":
+            return u"https://taaghche.com/book/{0}".format(self.val)
+        elif self.type == "ketabrah":
+            return u"http://ktbr.ir/b{0}".format(self.val)
+        elif self.type == "nlai":
+            return u"http://opac.nlai.ir/opac-prod/bibliographic/{0}".format(self.val)
         elif self.type == "url":
             return u"{0}".format(self.val)
         else:
