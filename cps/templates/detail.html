@@ -66,7 +66,7 @@
                     </ul>
               </div>
             {% endif %}
-            {% if audioentries|length > 0 %}
+            {% if audioentries|length > 0 and g.user.role_viewer() %}
               <div class="btn-group" role="group">
                 <button id="listen-in-browser" type="button" class="btn btn-primary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                   <span class="glyphicon glyphicon-music"></span> {{_('Listen in Browser')}}
@@ -105,7 +105,7 @@
             <span class="glyphicon glyphicon-star good"></span>
             {% if loop.last and loop.index < 5 %}
               {% for numer in range(5 - loop.index) %}
-                <span class="glyphicon glyphicon-star"></span>
+                <span class="glyphicon glyphicon-star-empty"></span>
               {% endfor %}
             {% endif %}
           {% endfor %}
@@ -174,7 +174,7 @@
             {{ c.name }}:
             {% for column in entry['custom_column_' ~ c.id] %}
               {% if c.datatype == 'rating' %}
-                {{ '%d' % (column.value / 2) }}
+                {{ (column.value / 2)|formatfloat }}
               {% else %}
                 {% if c.datatype == 'bool' %}
                   {% if column.value == true %}
@@ -183,7 +183,15 @@
                     <span class="glyphicon glyphicon-remove"></span>
                   {% endif %}
                 {% else %}
+                {% if c.datatype == 'float' %}
+                  {{ column.value|formatfloat(2) }}
+                {% else %}
+                {% if c.datatype == 'series' %}
+                  {{ '%s [%s]' % (column.value, column.extra|formatfloat(2)) }}
+                {% else %}
                   {{ column.value }}
+                {% endif %}
+                {% endif %}
                 {% endif %}
               {% endif %}
             {% endfor %}
@@ -202,6 +210,7 @@
             </label>
           </form>
           </p>
+          {% if g.user.check_visibility(32768) %}
           <p>
             <form id="archived_form" action="{{ url_for('web.toggle_archived', book_id=entry.id)}}" method="POST">
               <label class="block-label">
@@ -210,6 +219,7 @@
               </label>
             </form>
           </p>
+          {% endif %}
         </div>
       {% endif %}
 
@@ -240,7 +250,7 @@
                      data-remove-href="{{ url_for('shelf.remove_from_shelf', book_id=entry.id, shelf_id=shelf.id) }}"
                      data-shelf-action="add"
                   >
-                    {{shelf.name}}
+                    {{shelf.name}}{% if shelf.is_public == 1 %} {{_('(Public)')}}{% endif %}
                   </a>
                 </li>
               {% endif %}
@@ -257,7 +267,7 @@
                 >
                   <span {% if not shelf.is_public or g.user.role_edit_shelfs() %}
                         class="glyphicon glyphicon-remove"
-                        {% endif %}></span> {{shelf.name}}
+                        {% endif %}></span> {{shelf.name}}{% if shelf.is_public == 1 %} {{_('(Public)')}}{% endif %}
                 </a>
               {% endif %}
             {%endfor%}

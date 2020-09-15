@@ -19,6 +19,7 @@
 
 from __future__ import division, print_function, unicode_literals
 import os
+import sys
 import datetime
 import itertools
 import uuid
@@ -49,6 +50,7 @@ from . import constants
 
 
 session = None
+app_DB_path = None
 Base = declarative_base()
 
 
@@ -107,6 +109,11 @@ def get_sidebar_config(kwargs=None):
         {"glyph": "glyphicon-trash", "text": _('Archived Books'), "link": 'web.books_list', "id": "archived",
          "visibility": constants.SIDEBAR_ARCHIVED, 'public': (not g.user.is_anonymous), "page": "archived",
          "show_text": _('Show archived books'), "config_show": content})
+    '''sidebar.append(
+        {"glyph": "glyphicon-th-list", "text": _('Books List'), "link": 'web.books_list', "id": "list",
+         "visibility": constants.SIDEBAR_LIST, 'public': (not g.user.is_anonymous), "page": "list",
+         "show_text": _('Show Books List'), "config_show": content})'''
+
     return sidebar
 
 
@@ -169,20 +176,20 @@ class UserBase:
         return self.check_visibility(constants.DETAIL_RANDOM)
 
     def list_denied_tags(self):
-        mct = self.denied_tags.split(",")
-        return [t.strip() for t in mct]
+        mct = self.denied_tags or ""
+        return [t.strip() for t in mct.split(",")]
 
     def list_allowed_tags(self):
-        mct = self.allowed_tags.split(",")
-        return [t.strip() for t in mct]
+        mct = self.allowed_tags or ""
+        return [t.strip() for t in mct.split(",")]
 
     def list_denied_column_values(self):
-        mct = self.denied_column_value.split(",")
-        return [t.strip() for t in mct]
+        mct = self.denied_column_value or ""
+        return [t.strip() for t in mct.split(",")]
 
     def list_allowed_column_values(self):
-        mct = self.allowed_column_value.split(",")
-        return [t.strip() for t in mct]
+        mct = self.allowed_column_value or ""
+        return [t.strip() for t in mct.split(",")]
 
     def __repr__(self):
         return '<User %r>' % self.nickname
@@ -211,6 +218,7 @@ class User(UserBase, Base):
     denied_column_value = Column(String, default="")
     allowed_column_value = Column(String, default="")
     remote_auth_token = relationship('RemoteAuthToken', backref='user', lazy='dynamic')
+    series_view = Column(String(10), default="list")
 
 
 if oauth_support:
@@ -251,6 +259,7 @@ class Anonymous(AnonymousUserMixin, UserBase):
         self.allowed_tags = data.allowed_tags
         self.denied_column_value = data.denied_column_value
         self.allowed_column_value = data.allowed_column_value
+        self.series_view = data.series_view
 
     def role_admin(self):
         return False
@@ -447,7 +456,7 @@ class RemoteAuthToken(Base):
 
 
 # Migrate database to current version, has to be updated after every database change. Currently migration from
-# everywhere to curent should work. Migration is done by checking if relevant coloums are existing, and than adding
+# everywhere to current should work. Migration is done by checking if relevant columns are existing, and than adding
 # rows with SQL commands
 def migrate_Database(session):
     engine = session.bind
@@ -465,43 +474,47 @@ def migrate_Database(session):
         ArchivedBook.__table__.create(bind=engine)
     if not engine.dialect.has_table(engine.connect(), "registration"):
         ReadBook.__table__.create(bind=engine)
-        conn = engine.connect()
-        conn.execute("insert into registration (domain, allow) values('%.%',1)")
+        with engine.connect() as conn:
+            conn.execute("insert into registration (domain, allow) values('%.%',1)")
         session.commit()
     try:
         session.query(exists().where(Registration.allow)).scalar()
         session.commit()
     except exc.OperationalError:  # Database is not compatible, some columns are missing
-        conn = engine.connect()
-        conn.execute("ALTER TABLE registration ADD column 'allow' INTEGER")
-        conn.execute("update registration set 'allow' = 1")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE registration ADD column 'allow' INTEGER")
+            conn.execute("update registration set 'allow' = 1")
         session.commit()
     try:
         session.query(exists().where(RemoteAuthToken.token_type)).scalar()
         session.commit()
     except exc.OperationalError:  # Database is not compatible, some columns are missing
-        conn = engine.connect()
-        conn.execute("ALTER TABLE remote_auth_token ADD column 'token_type' INTEGER DEFAULT 0")
-        conn.execute("update remote_auth_token set 'token_type' = 0")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE remote_auth_token ADD column 'token_type' INTEGER DEFAULT 0")
+            conn.execute("update remote_auth_token set 'token_type' = 0")
         session.commit()
     try:
         session.query(exists().where(ReadBook.read_status)).scalar()
     except exc.OperationalError:
-        conn = engine.connect()
-        conn.execute("ALTER TABLE book_read_link ADD column 'read_status' INTEGER DEFAULT 0")
-        conn.execute("UPDATE book_read_link SET 'read_status' = 1 WHERE is_read")
-        conn.execute("ALTER TABLE book_read_link ADD column 'last_modified' DATETIME")
-        conn.execute("ALTER TABLE book_read_link ADD column 'last_time_started_reading' DATETIME")
-        conn.execute("ALTER TABLE book_read_link ADD column 'times_started_reading' INTEGER DEFAULT 0")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE book_read_link ADD column 'read_status' INTEGER DEFAULT 0")
+            conn.execute("UPDATE book_read_link SET 'read_status' = 1 WHERE is_read")
+            conn.execute("ALTER TABLE book_read_link ADD column 'last_modified' DATETIME")
+            conn.execute("ALTER TABLE book_read_link ADD column 'last_time_started_reading' DATETIME")
+            conn.execute("ALTER TABLE book_read_link ADD column 'times_started_reading' INTEGER DEFAULT 0")
         session.commit()
+    test = session.query(ReadBook).filter(ReadBook.last_modified == None).all()
+    for book in test:
+        book.last_modified = datetime.datetime.utcnow()
+    session.commit()
     try:
         session.query(exists().where(Shelf.uuid)).scalar()
     except exc.OperationalError:
-        conn = engine.connect()
-        conn.execute("ALTER TABLE shelf ADD column 'uuid' STRING")
-        conn.execute("ALTER TABLE shelf ADD column 'created' DATETIME")
-        conn.execute("ALTER TABLE shelf ADD column 'last_modified' DATETIME")
-        conn.execute("ALTER TABLE book_shelf_link ADD column 'date_added' DATETIME")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE shelf ADD column 'uuid' STRING")
+            conn.execute("ALTER TABLE shelf ADD column 'created' DATETIME")
+            conn.execute("ALTER TABLE shelf ADD column 'last_modified' DATETIME")
+            conn.execute("ALTER TABLE book_shelf_link ADD column 'date_added' DATETIME")
         for shelf in session.query(Shelf).all():
             shelf.uuid = str(uuid.uuid4())
             shelf.created = datetime.datetime.now()
@@ -512,31 +525,31 @@ def migrate_Database(session):
     # Handle table exists, but no content
     cnt = session.query(Registration).count()
     if not cnt:
-        conn = engine.connect()
-        conn.execute("insert into registration (domain, allow) values('%.%',1)")
+        with engine.connect() as conn:
+            conn.execute("insert into registration (domain, allow) values('%.%',1)")
         session.commit()
     try:
         session.query(exists().where(BookShelf.order)).scalar()
     except exc.OperationalError:  # Database is not compatible, some columns are missing
-        conn = engine.connect()
-        conn.execute("ALTER TABLE book_shelf_link ADD column 'order' INTEGER DEFAULT 1")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE book_shelf_link ADD column 'order' INTEGER DEFAULT 1")
         session.commit()
     try:
         create = False
         session.query(exists().where(User.sidebar_view)).scalar()
     except exc.OperationalError:  # Database is not compatible, some columns are missing
-        conn = engine.connect()
-        conn.execute("ALTER TABLE user ADD column `sidebar_view` Integer DEFAULT 1")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE user ADD column `sidebar_view` Integer DEFAULT 1")
         session.commit()
         create = True
     try:
         if create:
-            conn = engine.connect()
-            conn.execute("SELECT language_books FROM user")
+            with engine.connect() as conn:
+                conn.execute("SELECT language_books FROM user")
             session.commit()
     except exc.OperationalError:
-        conn = engine.connect()
-        conn.execute("UPDATE user SET 'sidebar_view' = (random_books* :side_random + language_books * :side_lang "
+        with engine.connect() as conn:
+            conn.execute("UPDATE user SET 'sidebar_view' = (random_books* :side_random + language_books * :side_lang "
                      "+ series_books * :side_series + category_books * :side_category + hot_books * "
                      ":side_hot + :side_autor + :detail_random)",
                      {'side_random': constants.SIDEBAR_RANDOM, 'side_lang': constants.SIDEBAR_LANGUAGE,
@@ -547,23 +560,30 @@ def migrate_Database(session):
     try:
         session.query(exists().where(User.denied_tags)).scalar()
     except exc.OperationalError:  # Database is not compatible, some columns are missing
-        conn = engine.connect()
-        conn.execute("ALTER TABLE user ADD column `denied_tags` String DEFAULT ''")
-        conn.execute("ALTER TABLE user ADD column `allowed_tags` String DEFAULT ''")
-        conn.execute("ALTER TABLE user ADD column `denied_column_value` DEFAULT ''")
-        conn.execute("ALTER TABLE user ADD column `allowed_column_value` DEFAULT ''")
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE user ADD column `denied_tags` String DEFAULT ''")
+            conn.execute("ALTER TABLE user ADD column `allowed_tags` String DEFAULT ''")
+            conn.execute("ALTER TABLE user ADD column `denied_column_value` String DEFAULT ''")
+            conn.execute("ALTER TABLE user ADD column `allowed_column_value` String DEFAULT ''")
+        session.commit()
+    try:
+        session.query(exists().where(User.series_view)).scalar()
+    except exc.OperationalError:
+        with engine.connect() as conn:
+            conn.execute("ALTER TABLE user ADD column `series_view` VARCHAR(10) DEFAULT 'list'")
+
     if session.query(User).filter(User.role.op('&')(constants.ROLE_ANONYMOUS) == constants.ROLE_ANONYMOUS).first() \
         is None:
         create_anonymous_user(session)
     try:
         # check if one table with autoincrement is existing (should be user table)
-        conn = engine.connect()
-        conn.execute("SELECT COUNT(*) FROM sqlite_sequence WHERE name='user'")
+        with engine.connect() as conn:
+            conn.execute("SELECT COUNT(*) FROM sqlite_sequence WHERE name='user'")
     except exc.OperationalError:
         # Create new table user_id and copy contents of table user into it
-        conn = engine.connect()
-        conn.execute("CREATE TABLE user_id (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
-                     " nickname VARCHAR(64),"
+        with engine.connect() as conn:
+            conn.execute("CREATE TABLE user_id (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
+                     "nickname VARCHAR(64),"
                      "email VARCHAR(120),"
                      "role SMALLINT,"
                      "password VARCHAR,"
@@ -571,21 +591,26 @@ def migrate_Database(session):
                      "locale VARCHAR(2),"
                      "sidebar_view INTEGER,"
                      "default_language VARCHAR(3),"
+                     "series_view VARCHAR(10),"
                      "UNIQUE (nickname),"
                      "UNIQUE (email))")
-        conn.execute("INSERT INTO user_id(id, nickname, email, role, password, kindle_mail,locale,"
-                     "sidebar_view, default_language) "
+            conn.execute("INSERT INTO user_id(id, nickname, email, role, password, kindle_mail,locale,"
+                     "sidebar_view, default_language, series_view) "
                      "SELECT id, nickname, email, role, password, kindle_mail, locale,"
                      "sidebar_view, default_language FROM user")
         # delete old user table and rename new user_id table to user:
-        conn.execute("DROP TABLE user")
-        conn.execute("ALTER TABLE user_id RENAME TO user")
+            conn.execute("DROP TABLE user")
+            conn.execute("ALTER TABLE user_id RENAME TO user")
         session.commit()
 
     # Remove login capability of user Guest
-    conn = engine.connect()
-    conn.execute("UPDATE user SET password='' where nickname = 'Guest' and password !=''")
-    session.commit()
+    try:
+        with engine.connect() as conn:
+            conn.execute("UPDATE user SET password='' where nickname = 'Guest' and password !=''")
+        session.commit()
+    except exc.OperationalError:
+        print('Settings database is not writeable. Exiting...')
+        sys.exit(1)
 
 
 def clean_database(session):
@@ -611,8 +636,7 @@ def delete_download(book_id):
     session.query(Downloads).filter(book_id == Downloads.book_id).delete()
     session.commit()
 
-
-# Generate user Guest (translated text), as anoymous user, no rights
+# Generate user Guest (translated text), as anonymous user, no rights
 def create_anonymous_user(session):
     user = User()
     user.nickname = "Guest"
@@ -646,7 +670,9 @@ def create_admin_user(session):
 def init_db(app_db_path):
     # Open session for database connection
     global session
+    global app_DB_path
 
+    app_DB_path = app_db_path
     engine = create_engine(u'sqlite:///{0}'.format(app_db_path), echo=False)
 
     Session = sessionmaker()

@@ -22,7 +22,7 @@ import os
 import json
 import sys
 
-from sqlalchemy import exc, Column, String, Integer, SmallInteger, Boolean, BLOB
+from sqlalchemy import exc, Column, String, Integer, SmallInteger, Boolean, BLOB, JSON
 from sqlalchemy.ext.declarative import declarative_base
 
 from . import constants, cli, logger, ub
@@ -53,9 +53,11 @@ class _Settings(_Base):
     mail_login = Column(String, default='mail@example.com')
     mail_password = Column(String, default='mypassword')
     mail_from = Column(String, default='automailer <mail@example.com>')
+    mail_size = Column(Integer, default=25*1024*1024)
 
     config_calibre_dir = Column(String)
     config_port = Column(Integer, default=constants.DEFAULT_PORT)
+    config_external_port = Column(Integer, default=constants.DEFAULT_PORT)
     config_certfile = Column(String)
     config_keyfile = Column(String)
 
@@ -91,16 +93,15 @@ class _Settings(_Base):
 
     config_use_google_drive = Column(Boolean, default=False)
     config_google_drive_folder = Column(String)
-    config_google_drive_watch_changes_response = Column(String)
+    config_google_drive_watch_changes_response = Column(JSON, default={})
 
     config_use_goodreads = Column(Boolean, default=False)
     config_goodreads_api_key = Column(String)
     config_goodreads_api_secret = Column(String)
-
+    config_register_email = Column(Boolean, default=False)
     config_login_type = Column(Integer, default=0)
 
     config_kobo_proxy = Column(Boolean, default=False)
-
 
     config_ldap_provider_url = Column(String, default='example.org')
     config_ldap_port = Column(SmallInteger, default=389)
@@ -116,10 +117,11 @@ class _Settings(_Base):
     config_ldap_group_members_field = Column(String, default='memberUid')
     config_ldap_group_name = Column(String, default='calibreweb')
 
-    config_ebookconverter = Column(Integer, default=0)
-    config_converterpath = Column(String)
+    config_kepubifypath = Column(String, default=None)
+    config_converterpath = Column(String, default=None)
     config_calibre = Column(String)
-    config_rarfile_location = Column(String)
+    config_rarfile_location = Column(String, default=None)
+    config_upload_formats = Column(String, default=','.join(constants.EXTENSIONS_UPLOAD))
 
     config_updatechannel = Column(Integer, default=constants.UPDATE_STABLE)
 
@@ -139,6 +141,22 @@ class _ConfigSQL(object):
         self.db_configured = None
         self.config_calibre_dir = None
         self.load()
+
+        change = False
+        if self.config_converterpath == None:
+            change = True
+            self.config_converterpath = autodetect_calibre_binary()
+
+        if self.config_kepubifypath == None:
+            change = True
+            self.config_kepubifypath = autodetect_kepubify_binary()
+
+        if self.config_rarfile_location == None:
+            change = True
+            self.config_rarfile_location = autodetect_unrar_binary()
+        if change:
+            self.save()
+
 
     def _read_from_storage(self):
         if self._settings is None:
@@ -197,20 +215,20 @@ class _ConfigSQL(object):
         return self.show_element_new_user(constants.DETAIL_RANDOM)
 
     def list_denied_tags(self):
-        mct = self.config_denied_tags.split(",")
-        return [t.strip() for t in mct]
+        mct = self.config_denied_tags or ""
+        return [t.strip() for t in mct.split(",")]
 
     def list_allowed_tags(self):
-        mct = self.config_allowed_tags.split(",")
-        return [t.strip() for t in mct]
+        mct = self.config_allowed_tags or ""
+        return [t.strip() for t in mct.split(",")]
 
     def list_denied_column_values(self):
-        mct = self.config_denied_column_value.split(",")
-        return [t.strip() for t in mct]
+        mct = self.config_denied_column_value or ""
+        return [t.strip() for t in mct.split(",")]
 
     def list_allowed_column_values(self):
-        mct = self.config_allowed_column_value.split(",")
-        return [t.strip() for t in mct]
+        mct = self.config_allowed_column_value or ""
+        return [t.strip() for t in mct.split(",")]
 
     def get_log_level(self):
         return logger.get_level_name(self.config_log_level)
@@ -263,17 +281,19 @@ class _ConfigSQL(object):
                         v = column.default.arg
                 setattr(self, k, v)
 
-        if self.config_google_drive_watch_changes_response:
-            self.config_google_drive_watch_changes_response = json.loads(self.config_google_drive_watch_changes_response)
-
         have_metadata_db = bool(self.config_calibre_dir)
         if have_metadata_db:
             if not self.config_use_google_drive:
                 db_file = os.path.join(self.config_calibre_dir, 'metadata.db')
                 have_metadata_db = os.path.isfile(db_file)
         self.db_configured = have_metadata_db
-
-        logger.setup(self.config_logfile, self.config_log_level)
+        constants.EXTENSIONS_UPLOAD = [x.lstrip().rstrip() for x in self.config_upload_formats.split(',')]
+        logfile = logger.setup(self.config_logfile, self.config_log_level)
+        if logfile != self.config_logfile:
+            log.warning("Log path %s not valid, falling back to default", self.config_logfile)
+            self.config_logfile = logfile
+            self._session.merge(s)
+            self._session.commit()
 
     def save(self):
         '''Apply all configuration values to the underlying storage.'''
@@ -330,17 +350,41 @@ def _migrate_table(session, orm_class):
     if changed:
         session.commit()
 
+
 def autodetect_calibre_binary():
     if sys.platform == "win32":
-        calibre_path = ["C:\\program files\calibre\calibre-convert.exe",
-                        "C:\\program files(x86)\calibre\calibre-convert.exe"]
+        calibre_path = ["C:\\program files\\calibre\\ebook-convert.exe",
+                        "C:\\program files(x86)\\calibre\\ebook-convert.exe",
+                        "C:\\program files(x86)\\calibre2\\ebook-convert.exe",
+                        "C:\\program files\\calibre2\\ebook-convert.exe"]
     else:
         calibre_path = ["/opt/calibre/ebook-convert"]
     for element in calibre_path:
         if os.path.isfile(element) and os.access(element, os.X_OK):
             return element
-    return None
+    return ""
 
+def autodetect_unrar_binary():
+    if sys.platform == "win32":
+        calibre_path = ["C:\\program files\\WinRar\\unRAR.exe",
+                        "C:\\program files(x86)\\WinRar\\unRAR.exe"]
+    else:
+        calibre_path = ["/usr/bin/unrar"]
+    for element in calibre_path:
+        if os.path.isfile(element) and os.access(element, os.X_OK):
+            return element
+    return ""
+
+def autodetect_kepubify_binary():
+    if sys.platform == "win32":
+        calibre_path = ["C:\\program files\\kepubify\\kepubify-windows-64Bit.exe",
+                        "C:\\program files(x86)\\kepubify\\kepubify-windows-64Bit.exe"]
+    else:
+        calibre_path = ["/opt/kepubify/kepubify-linux-64bit", "/opt/kepubify/kepubify-linux-32bit"]
+    for element in calibre_path:
+        if os.path.isfile(element) and os.access(element, os.X_OK):
+            return element
+    return ""
 
 def _migrate_database(session):
     # make sure the table is created, if it does not exist

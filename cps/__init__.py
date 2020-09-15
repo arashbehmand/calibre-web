@@ -37,6 +37,7 @@ from . import config_sql, logger, cache_buster, cli, ub, db
 from .reverseproxy import ReverseProxied
 from .server import WebServer
 
+
 mimetypes.init()
 mimetypes.add_type('application/xhtml+xml', '.xhtml')
 mimetypes.add_type('application/epub+zip', '.epub')
@@ -56,10 +57,17 @@ mimetypes.add_type('application/ogg', '.ogg')
 mimetypes.add_type('application/ogg', '.oga')
 
 app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    REMEMBER_COOKIE_SAMESITE='Lax',  # will be available in flask-login 0.5.1 earliest
+)
+
 
 lm = LoginManager()
 lm.login_view = 'web.login'
 lm.anonymous_user = ub.Anonymous
+lm.session_protection = 'strong'
 
 ub.init_db(cli.settingspath)
 # pylint: disable=no-member
@@ -74,6 +82,8 @@ _BABEL_TRANSLATIONS = set()
 log = logger.create()
 
 from . import services
+
+calibre_db = db.CalibreDB()
 
 def create_app():
     app.wsgi_app = ReverseProxied(app.wsgi_app)
@@ -91,7 +101,8 @@ def create_app():
     app.secret_key = os.getenv('SECRET_KEY', config_sql.get_flask_session_key(ub.session))
 
     web_server.init_app(app, config)
-    db.setup_db(config)
+    calibre_db.setup_db(config, cli.settingspath)
+    calibre_db.start()
 
     babel.init_app(app)
     _BABEL_TRANSLATIONS.update(str(item) for item in babel.list_translations())
